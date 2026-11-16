@@ -161,6 +161,20 @@
 @media (max-width: 480px) { .filter-grid { grid-template-columns: 1fr; } }
 .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin: 12px 0; }
 @media (max-width: 760px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 480px) {
+  .admin-bar { padding: 14px; border-radius: 14px; }
+  .admin-bar h2 { font-size: 16px; }
+  .dash-actions button { padding: 9px 11px; font-size: 12.5px; }
+  .kpi-grid { gap: 8px; }
+  .kpi { padding: 12px 8px; }
+  .kpi b { font-size: 21px; }
+  .card { padding: 14px; }
+  .card h2 { font-size: 16px; }
+  .iconbtn { width: 100%; }
+  table.tbl { font-size: 12px; }
+  table.tbl th, table.tbl td { padding: 6px; }
+  .tren { min-height: 0; }
+}
 .kpi { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 10px; text-align: center; box-shadow: 0 2px 12px rgba(15,23,42,.06); }
 .kpi span { font-size: 12px; color: #64748b; display: block; }
 .kpi b { display: block; font-size: 24px; color: #1e3a8a; margin: 4px 0; line-height: 1.2; }
@@ -216,7 +230,7 @@ button.abtn { display: inline-flex; align-items: center; gap: 7px; background: #
 .abtn .ic { width: 16px; height: 16px; }
 .sec { display: flex !important; align-items: center; gap: 8px; }
 .sec .ic { width: 18px; height: 18px; color: #1d4ed8; }
-.kpi-ico { width: 38px; height: 38px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 6px; }
+span.kpi-ico { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; }
 .kpi-ico .ic { width: 20px; height: 20px; }
 .kpi-ico.navy { background: #dbeafe; color: #1d4ed8; }
 .kpi-ico.green { background: #dcfce7; color: #166534; }
@@ -754,25 +768,60 @@ function validasi() {
   };
 }
 
+function uuid4() {
+  try {
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    var h = Array.prototype.map.call(b, function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  } catch (e) {
+    return "x-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36);
+  }
+}
+
 function kirimSurvei() {
   var data = validasi();
   if (!data) return;
   var btn = document.getElementById("kirimBtn");
+  var warn = document.getElementById("warnEl");
   btn.disabled = true;
   btn.textContent = "Mengirim...";
-  var selesai = function () {
+  warn.classList.remove("show");
+  function pulih() {
     btn.disabled = false;
     btn.textContent = "Kirim Jawaban Survei";
     tampilLayar("thanksView");
-  };
-  if (!APPS_SCRIPT_URL) { selesai(); return; } // mode demo: tanpa backend
-  // text/plain agar tidak kena preflight CORS; respons tak terbaca (no-cors) tapi data tetap tercatat.
-  fetch(APPS_SCRIPT_URL, {
-    method: "POST",
-    mode: "no-cors",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(data)
-  }).then(selesai, selesai);
+  }
+  if (!APPS_SCRIPT_URL) { pulih(); return; } // mode demo: tanpa backend
+  // rid dipakai server untuk menolak kiriman ganda (retry) agar
+  // banyak pengisi bersamaan tetap tercatat tepat 1 baris per kiriman.
+  data.rid = uuid4();
+  // text/plain agar tidak kena preflight CORS; respons JSON terbaca.
+  var payload = JSON.stringify(data);
+  var attempt = 0;
+  function coba() {
+    attempt++;
+    fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: payload
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) { pulih(); return; }
+      throw new Error("gagal");
+    }).catch(function () {
+      if (attempt < 3) {
+        setTimeout(coba, attempt * 1500 + Math.random() * 500);
+      } else {
+        btn.disabled = false;
+        btn.textContent = "Kirim Jawaban Survei";
+        warn.innerHTML = "⚠ <b>Gagal mengirim.</b> Server sibuk / koneksi terputus. Data Anda tidak hilang — tekan <b>Kirim Jawaban Survei</b> untuk mencoba lagi.";
+        warn.classList.add("show");
+        warn.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }
+  coba();
 }
 
 /* ===== LAYAR & AKSES LAPORAN (admin) ===== */
@@ -1062,8 +1111,17 @@ function tickVol(mx) {
 }
 function svgHarian(days, byDay, mode) {
   var n = days.length;
-  var step = 46, padL = 36, padT = 22, padB = 38, plotH = 140;
-  var W = padL + (n - 1) * step + 22, H = padT + plotH + padB;
+  var padL = 36, padT = 22, plotH = 140;
+  var step = 46, labEvery = 1, showResp = true, dotR = 5, valFs = 9.5;
+  try {
+    var hostEl = document.getElementById(mode === 'vol' ? 'chartVolume' : 'chartTren');
+    var availW = hostEl && hostEl.clientWidth ? hostEl.clientWidth : 0;
+    if (availW > 0 && n > 1) step = Math.max(24, Math.min(46, (availW - padL - 22) / (n - 1)));
+  } catch (e) {}
+  if (step < 36) { labEvery = 2; showResp = false; valFs = 8.5; }
+  if (step < 28) { dotR = 3.5; }
+  var padB = showResp ? 38 : 24;
+  var W = Math.round(padL + (n - 1) * step + 22), H = padT + plotH + padB;
   var vals = days.map(function (k) { return mode === 'ikm' ? (byDay[k].s / byDay[k].n) : byDay[k].n; });
   var maxV = mode === 'ikm' ? 100 : 1;
   if (mode === 'vol') { vals.forEach(function (v) { if (v > maxV) maxV = v; }); }
@@ -1071,7 +1129,7 @@ function svgHarian(days, byDay, mode) {
   var col = mode === 'ikm' ? '#2563eb' : '#22c55e';
   function X(i) { return padL + i * step; }
   function Y(v) { return padT + plotH - (v / maxV * plotH); }
-  var s = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;width:100%;height:auto;min-width:640px" role="img">';
+  var s = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;width:100%;height:auto" role="img">';
   ticks.forEach(function (tk) {
     var y = Y(tk);
     s += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - 8) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>';
@@ -1089,13 +1147,21 @@ function svgHarian(days, byDay, mode) {
   vals.forEach(function (v, i) {
     var mc = mode === 'ikm' ? warnaUnsur(v) : col;
     var lab = mode === 'ikm' ? v.toFixed(0) : String(Math.round(v));
-    s += '<circle cx="' + X(i) + '" cy="' + Y(v) + '" r="5" fill="' + mc + '" stroke="#fff" stroke-width="2"><title>' + days[i].slice(8, 10) + '/' + days[i].slice(5, 7) + ': ' + lab + '</title></circle>';
-    s += '<text x="' + X(i) + '" y="' + (Y(v) - 10) + '" text-anchor="middle" font-size="9.5" font-weight="800" fill="#1e3a8a">' + lab + '</text>';
-    s += '<text x="' + X(i) + '" y="' + (padT + plotH + 16) + '" text-anchor="middle" font-size="9" fill="#64748b">' + days[i].slice(8, 10) + '/' + days[i].slice(5, 7) + '</text>';
-    if (mode === 'ikm') s += '<text x="' + X(i) + '" y="' + (padT + plotH + 29) + '" text-anchor="middle" font-size="8.5" fill="#94a3b8">' + byDay[days[i]].n + ' resp</text>';
+    s += '<circle cx="' + X(i) + '" cy="' + Y(v) + '" r="' + dotR + '" fill="' + mc + '" stroke="#fff" stroke-width="2"><title>' + days[i].slice(8, 10) + '/' + days[i].slice(5, 7) + ': ' + lab + '</title></circle>';
+    s += '<text x="' + X(i) + '" y="' + (Y(v) - 10) + '" text-anchor="middle" font-size="' + valFs + '" font-weight="800" fill="#1e3a8a">' + lab + '</text>';
+    if (i % labEvery === 0) s += '<text x="' + X(i) + '" y="' + (padT + plotH + 16) + '" text-anchor="middle" font-size="9" fill="#64748b">' + days[i].slice(8, 10) + '/' + days[i].slice(5, 7) + '</text>';
+    if (mode === 'ikm' && showResp) s += '<text x="' + X(i) + '" y="' + (padT + plotH + 29) + '" text-anchor="middle" font-size="8.5" fill="#94a3b8">' + byDay[days[i]].n + ' resp</text>';
   });
   return s + '</svg>';
 }
+
+var __rzT = null;
+window.addEventListener("resize", function () {
+  var lv = document.getElementById("laporView");
+  if (!lv || lv.hidden) return;
+  clearTimeout(__rzT);
+  __rzT = setTimeout(function () { try { renderLaporan(); } catch (e) {} }, 250);
+});
 
 function fmtKoma(v, d) {
   var s = Number(v).toFixed(d === undefined ? 2 : d);
